@@ -187,6 +187,8 @@ A small always-on-top window with:
 - Status indicator (Recording, Flushing, Transcribing, Summarizing, Done)
 - "Open PDF" and "Open Folder" buttons after completion
 
+![meetscribe GUI](screenshot.png)
+
 ## Output
 
 Each recording gets its own session directory:
