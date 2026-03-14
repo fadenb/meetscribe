@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "meetscribe"
-version = "0.1.0"
+name = "meetscribe-offline"
+version = "0.2.0"
 description = "Fully local meeting transcription with speaker diarization, AI summaries, and PDF output"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -53,4 +53,5 @@ Repository = "https://github.com/pretyflaco/meetscribe"
 Issues = "https://github.com/pretyflaco/meetscribe/issues"
 
 [project.optional-dependencies]
+rtl = ["arabic-reshaper>=3.0", "python-bidi>=0.4"]
 dev = ["ruff", "pytest"]
