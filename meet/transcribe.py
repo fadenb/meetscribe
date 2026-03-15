@@ -881,6 +881,9 @@ def transcribe(
     # but keep the stereo file for channel-aware diarization hints
     is_stereo = _is_stereo(audio_path)
 
+    if not is_stereo and config.mixdown == "dual":
+        print(f"  Warning: --mixdown dual requires stereo audio, using standard mono pipeline")
+
     if is_stereo and config.use_dual_channel and config.mixdown == "dual":
         print(f"  Dual-channel detected: transcribing channels separately")
         return _transcribe_dual_channel(audio_path, config)
