@@ -336,9 +336,9 @@ def record(output_dir, filename, mic, monitor, virtual_sink):
 )
 @click.option(
     "--mixdown",
-    type=click.Choice(["mic", "avg"]),
-    default="mic",
-    help="Stereo mixdown mode: mic=left channel only, avg=transcribe both channels separately (default: mic)",
+    type=click.Choice(["mono", "dual"]),
+    default="mono",
+    help="Stereo mixdown mode: mono=mic channel only, dual=transcribe both channels separately (default: mono)",
 )
 def transcribe(
     audio_file,
@@ -525,9 +525,9 @@ def transcribe(
 )
 @click.option(
     "--mixdown",
-    type=click.Choice(["mic", "avg"]),
-    default="mic",
-    help="Stereo mixdown mode: mic=left channel only, avg=transcribe both channels separately (default: mic)",
+    type=click.Choice(["mono", "dual"]),
+    default="mono",
+    help="Stereo mixdown mode: mono=mic channel only, dual=transcribe both channels separately (default: mono)",
 )
 def run(
     output_dir,
