@@ -5,7 +5,8 @@ summaries, and professional PDF output.
 
 Records dual-channel audio (your mic + system audio) from **any** meeting
 app and produces diarized transcripts using WhisperX + pyannote-audio.
-Everything runs on your machine -- no cloud APIs, no data leaves your computer.
+Works fully offline with local models, or optionally use cloud APIs
+(OpenRouter, Claude Max) for higher-quality summaries.
 
 ## Works with any meeting app
 
@@ -43,17 +44,22 @@ including browser-based meetings and standalone desktop clients.
   English, German, Turkish, French, Spanish, Farsi, and 90+ other languages
 - **Speaker diarization** -- pyannote-audio identifies who said what, with
   automatic YOU/REMOTE labeling from the dual-channel signal
-- **AI meeting summaries** -- local LLMs via Ollama extract key topics, action
-  items, decisions, and follow-ups
+- **AI meeting summaries** -- local LLMs via Ollama, or cloud APIs via
+  OpenRouter / Claude Max, with automatic fallback between backends
+- **Voiceprint speaker recognition** -- automatically identifies speakers
+  across meetings using voice embedding profiles
+- **Meeting sync** -- push transcripts and summaries to any Git repository
+  on a configurable schedule
 - **Professional PDF output** -- summary + full transcript in a clean,
   page-numbered PDF with full Unicode support (DejaVu Sans) and RTL for Farsi
 - **Multiple output formats** -- `.txt`, `.srt`, `.json`, `.summary.md`, `.pdf`
 - **GTK3 GUI widget** -- small always-on-top window with record/stop, timer,
   and one-click access to results
 - **CLI** -- `meet record`, `meet transcribe`, `meet run`, `meet gui`,
-  `meet devices`, `meet check`
+  `meet label`, `meet enroll`, `meet sync`, `meet devices`, `meet check`
 - **Per-session folders** -- each recording gets its own organized directory
-- **Offline** -- after initial model download, everything works without internet
+- **Offline-first** -- after initial model download, core features work without
+  internet; cloud backends are optional upgrades
 
 ## Quick start
 
@@ -245,7 +251,7 @@ Example `.txt` output:
 
 ## AI summary
 
-When Ollama is running, meetscribe generates a structured meeting summary with:
+meetscribe generates a structured meeting summary with:
 - Overview
 - Key topics discussed
 - Action items (with owners when mentioned)
@@ -272,6 +278,69 @@ Disable summaries:
 ```bash
 meet run --no-summarize
 ```
+
+### Summary backends
+
+meetscribe supports three backends with automatic fallback:
+
+| Backend | Setup | Cost | Quality |
+|---------|-------|------|---------|
+| `ollama` (default) | `ollama serve` + `ollama pull qwen3.5:9b` | Free | Good |
+| `openrouter` | Set `OPENROUTER_API_KEY` | Pay-per-use | Excellent |
+| `claudemax` | Run claude-max-api-proxy on localhost:3457 | Claude Max subscription | Excellent |
+
+```bash
+# Use a specific backend
+meet run --summary-backend openrouter --summary-model anthropic/claude-sonnet-4.6
+
+# Or set via environment variables
+export MEETSCRIBE_SUMMARY_BACKEND=openrouter
+export MEETSCRIBE_SUMMARY_MODEL=anthropic/claude-sonnet-4.6
+```
+
+If the configured backend is unavailable, meetscribe automatically tries the
+next one in the fallback chain: claudemax → openrouter → ollama.
+
+### Customizing the prompt
+
+The summarization prompt lives in `meet/prompts/summarize_system.md`. Edit it
+to change the summary format, add domain-specific instructions, or tune for
+your preferred model. No Python changes needed.
+
+## Voiceprint speaker recognition
+
+meetscribe can automatically identify speakers across meetings using voice
+embeddings. After you label speakers in one meeting, their voice profiles are
+stored and matched against future recordings.
+
+```bash
+# Build profiles from already-labeled sessions
+meet enroll ~/meet-recordings/meeting-20260330-*
+
+# Future meetings will auto-suggest speaker names in the GUI labeling dialog
+```
+
+Profiles are stored in `~/.config/meet/speaker_profiles.json` and improve
+with each labeled session (running average of embeddings).
+
+## Meeting sync
+
+Push meeting artifacts to a Git repository on a configurable schedule.
+
+```bash
+# Create an example config
+meet sync --init-config
+# Edit ~/.config/meet/sync_config.json with your repo URL and schedule
+
+# Push a session manually
+meet sync ~/meet-recordings/meeting-20260331-110038_STANDUP
+
+# View configured schedule
+meet sync --list-schedule
+```
+
+The GUI auto-syncs after recording if a matching schedule is configured.
+Sessions that don't match the schedule are skipped unless `--force` is used.
 
 ## Multilingual support
 

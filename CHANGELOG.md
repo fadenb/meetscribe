@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.3.0 — 2026-04-01
+
+### New features
+
+- **Multi-backend summarization** — supports three backends with automatic
+  fallback: `claudemax` (Claude Max API Proxy), `openrouter` (OpenRouter API),
+  and `ollama` (local). If the configured backend is unavailable, meetscribe
+  automatically tries the next one. Use `--summary-backend` and
+  `--summary-model` flags, or set `MEETSCRIBE_SUMMARY_BACKEND` /
+  `MEETSCRIBE_SUMMARY_MODEL` env vars.
+
+- **Voiceprint speaker recognition** — automatically identifies speakers across
+  meetings using voice embeddings. After labeling a meeting, speaker profiles
+  are stored in `~/.config/meet/speaker_profiles.json`. Future meetings match
+  voices against the database using cosine similarity. Use `meet enroll` to
+  build profiles from past sessions, or let the GUI update profiles
+  automatically after each labeling.
+
+- **Meeting sync** — push meeting artifacts (transcript, summary, PDF, SRT) to
+  any configured Git repository on a schedule. Configure your repo URL and
+  meeting schedule in `~/.config/meet/sync_config.json`. Use `meet sync` to
+  push manually or let the GUI auto-sync after recording. Run
+  `meet sync --init-config` to generate an example config.
+
+- **Improved summarization prompts** — prompt templates extracted to standalone
+  markdown files (`meet/prompts/summarize_system.md`, etc.) for easy iteration
+  without touching Python code. Prompt rewritten for better results with
+  local/open-source models: more information-dense, preserves technical
+  specificity, captures implied action items, provides format guidance.
+
+### Improvements
+
+- Dynamic context window sizing for ollama — automatically sizes `num_ctx` to
+  fit long transcripts (up to 64K tokens) instead of truncating.
+- Response validation catches upstream API errors (expired tokens, rate limits)
+  that would otherwise be silently saved as the meeting summary.
+- Thinking mode explicitly disabled for ollama models (`think: false`) to avoid
+  wasting tokens on hidden reasoning with models like GLM-4.7-flash and Qwen 3.5.
+- GUI auto-sync guarded by `is_sync_configured()` — silently skips if no repo
+  is configured.
+
+### Testing
+
+- All 81 existing tests pass with the new prompt loading system.
+
+---
+
 ## v0.2.0 — 2026-03-14
 
 ### New features
