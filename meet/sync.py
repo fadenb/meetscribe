@@ -104,6 +104,7 @@ def _repo_name_from_url(repo_url: str) -> str:
 
 # ─── Schedule matching ────────────────────────────────────────────────────────
 
+
 @dataclass
 class MeetingMatch:
     name: str
@@ -113,6 +114,7 @@ class MeetingMatch:
 @dataclass
 class SyncCandidate:
     """A meeting that passed schedule + team-member checks and is ready to sync."""
+
     match: MeetingMatch
     team_members_found: list[str]  # names of recognized team members in this meeting
 
@@ -122,7 +124,7 @@ def check_sync_candidate(session_dir: Path) -> SyncCandidate | None:
 
     Passes two gates:
     1. Schedule match (day + time window)
-    2. At least min_team_members recognized Blink team members are present
+    2. At least min_team_members recognized team members are present
 
     Returns a SyncCandidate if both pass, None otherwise.
     """
@@ -155,7 +157,10 @@ def check_sync_candidate(session_dir: Path) -> SyncCandidate | None:
     if len(found) < min_required:
         log.debug(
             "Skipping sync for %s: only %d/%d team members found (%s)",
-            session_dir.name, len(found), min_required, found,
+            session_dir.name,
+            len(found),
+            min_required,
+            found,
         )
         return None
 
@@ -183,6 +188,7 @@ def detect_meeting_type(session_dir: Path) -> MeetingMatch | None:
         # Treat naive datetimes as local time, convert to UTC
         if started_at.tzinfo is None:
             import time as _time
+
             local_offset = timedelta(seconds=-_time.timezone)
             started_at = started_at - local_offset
             started_at = started_at.replace(tzinfo=timezone.utc)
@@ -193,7 +199,7 @@ def detect_meeting_type(session_dir: Path) -> MeetingMatch | None:
         return None
 
     config = load_sync_config()
-    weekday = started_at.weekday()   # 0=Monday
+    weekday = started_at.weekday()  # 0=Monday
     hour = started_at.hour
     minute = started_at.minute
     meeting_minutes = hour * 60 + minute
@@ -217,11 +223,12 @@ def _find_session_json(session_dir: Path) -> Path | None:
 
 # ─── Repo management ──────────────────────────────────────────────────────────
 
-def _run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
+
+def _run(
+    cmd: list[str], cwd: Path | None = None, check: bool = True
+) -> subprocess.CompletedProcess:
     """Run a command, raising on non-zero exit if check=True."""
-    result = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True
-    )
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if check and result.returncode != 0:
         raise RuntimeError(
             f"Command failed: {' '.join(cmd)}\n"
@@ -292,7 +299,9 @@ def _collect_files(session_dir: Path) -> list[tuple[Path, str]]:
             continue
 
         # Map to a descriptive destination filename
-        if f.name.endswith(".summary.md") or (f.suffix == ".md" and ".summary." not in f.name):
+        if f.name.endswith(".summary.md") or (
+            f.suffix == ".md" and ".summary." not in f.name
+        ):
             dest_name = "summary.md"
         elif f.suffix == ".txt":
             dest_name = "transcript.txt"
@@ -390,6 +399,7 @@ def sync_session(
     Raises:
         RuntimeError: If git operations fail or sync is not configured.
     """
+
     def _log(msg: str) -> None:
         if progress_callback:
             progress_callback(msg)
@@ -419,8 +429,10 @@ def sync_session(
         _log(f"  Staged: {dest.relative_to(repo)}")
 
     # Also stage the README
-    _run(["git", "add", str((repo / MEETINGS_SUBDIR / "README.md").relative_to(repo))],
-         cwd=repo)
+    _run(
+        ["git", "add", str((repo / MEETINGS_SUBDIR / "README.md").relative_to(repo))],
+        cwd=repo,
+    )
 
     # Stage all copied files
     rel_paths = [str(p.relative_to(repo)) for p in copied]
@@ -449,7 +461,7 @@ def maybe_sync_session(
     session_dir: Path,
     progress_callback=None,
 ) -> MeetingMatch | None:
-    """Detect, validate (team members), and sync a Blink meeting.
+    """Detect, validate (team members), and sync a scheduled meeting.
 
     Used by the CLI `meet sync` command. The GUI uses check_sync_candidate +
     sync_session directly so it can interpose a confirmation dialog in between.
@@ -467,7 +479,7 @@ def maybe_sync_session(
         if progress_callback:
             progress_callback(msg)
 
-    _log(f"Blink meeting detected: {candidate.match.name} — syncing...")
+    _log(f"Scheduled meeting detected: {candidate.match.name} — syncing...")
     try:
         sync_session(session_dir, candidate.match, progress_callback=progress_callback)
     except Exception as exc:

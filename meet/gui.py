@@ -175,6 +175,7 @@ progressbar progress {
 
 # ─── State enum ─────────────────────────────────────────────────────────────
 
+
 class _State:
     IDLE = "idle"
     RECORDING = "recording"
@@ -193,11 +194,16 @@ class _State:
 
 # ─── Main Window ────────────────────────────────────────────────────────────
 
-class MeetRecorderWindow(Gtk.Window):
 
-    def __init__(self, capture_kwargs: dict, transcribe_kwargs: dict,
-                 summarize: bool = True, summary_backend: str | None = None,
-                 summary_model: str | None = None):
+class MeetRecorderWindow(Gtk.Window):
+    def __init__(
+        self,
+        capture_kwargs: dict,
+        transcribe_kwargs: dict,
+        summarize: bool = True,
+        summary_backend: str | None = None,
+        summary_model: str | None = None,
+    ):
         super().__init__(title="Meet Recorder")
 
         self._capture_kwargs = capture_kwargs
@@ -222,10 +228,10 @@ class MeetRecorderWindow(Gtk.Window):
         self._label_event = threading.Event()
         self._label_result: dict[str, str] | None = None  # label_map or None (skip)
         self._label_speakers: list = []  # SpeakerInfo list, set by worker
-        self._label_entries: list = []   # Gtk.Entry widgets
+        self._label_entries: list = []  # Gtk.Entry widgets
         self._label_temp_clips: list[Path] = []  # temp WAV files for cleanup
         self._label_auto_matches: dict = {}  # speaker_id -> SpeakerMatch, set by worker
-        self._label_channel_map: dict = {}   # speaker_id -> 'mic'|'system', set by worker
+        self._label_channel_map: dict = {}  # speaker_id -> 'mic'|'system', set by worker
         self._label_audio_path: Path | None = None  # audio file for profile update
 
         # Threading synchronization for sync confirmation
@@ -353,7 +359,7 @@ class MeetRecorderWindow(Gtk.Window):
         self._label_box.pack_start(label_btn_box, False, False, 0)
         vbox.pack_start(self._label_box, False, False, 4)
 
-        # Sync confirmation prompt (shown when a Blink meeting is detected)
+        # Sync confirmation prompt (shown when a scheduled meeting is detected)
         self._sync_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self._sync_box.set_halign(Gtk.Align.CENTER)
 
@@ -366,7 +372,7 @@ class MeetRecorderWindow(Gtk.Window):
         sync_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         sync_btn_box.set_halign(Gtk.Align.CENTER)
 
-        self._sync_push_btn = Gtk.Button(label="Push to blink-wip")
+        self._sync_push_btn = Gtk.Button(label="Sync to repo")
         self._sync_push_btn.get_style_context().add_class("record-btn")
         self._sync_push_btn.connect("clicked", self._on_sync_push)
         sync_btn_box.pack_start(self._sync_push_btn, False, False, 0)
@@ -393,7 +399,11 @@ class MeetRecorderWindow(Gtk.Window):
     # ── Button handler ──────────────────────────────────────────────────
 
     def _on_button_clicked(self, _widget):
-        if self._state == _State.IDLE or self._state == _State.DONE or self._state == _State.ERROR:
+        if (
+            self._state == _State.IDLE
+            or self._state == _State.DONE
+            or self._state == _State.ERROR
+        ):
             self._start_recording()
         elif self._state == _State.RECORDING:
             self._stop_recording()
@@ -444,6 +454,7 @@ class MeetRecorderWindow(Gtk.Window):
         # Update voice profiles in background with confirmed labels
         if self._label_result and self._label_audio_path:
             import threading as _threading
+
             _threading.Thread(
                 target=self._update_voice_profiles,
                 args=(self._label_result,),
@@ -460,7 +471,7 @@ class MeetRecorderWindow(Gtk.Window):
         self._label_event.set()
 
     def _on_sync_push(self, _widget):
-        """User confirmed pushing to blink-wip."""
+        """User confirmed syncing to repo."""
         self._sync_confirmed = True
         self._sync_box.hide()
         self.resize(300, 150)
@@ -468,7 +479,7 @@ class MeetRecorderWindow(Gtk.Window):
         self._sync_event.set()
 
     def _on_sync_skip(self, _widget):
-        """User chose to skip the blink-wip sync."""
+        """User chose to skip the sync."""
         self._sync_confirmed = False
         self._sync_box.hide()
         self.resize(300, 150)
@@ -479,6 +490,7 @@ class MeetRecorderWindow(Gtk.Window):
         """Play a speaker audio clip."""
         try:
             from meet.label import play_clip
+
             proc = play_clip(clip_path)
             # Don't block the UI — fire and forget
         except Exception:
@@ -499,9 +511,11 @@ class MeetRecorderWindow(Gtk.Window):
             return
         try:
             from meet.voiceprint import update_profiles_from_confirmed_labels
+
             # We need the original (pre-relabel) segments, stored on the transcript
             # that was passed to _do_label_speakers.  Retrieve from the saved JSON.
             from meet.label import _find_session_files, _load_transcript
+
             files = _find_session_files(self._label_audio_path.parent)
             transcript_json = files.get("json")
             if not transcript_json or not transcript_json.exists():
@@ -515,9 +529,8 @@ class MeetRecorderWindow(Gtk.Window):
             )
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).warning(
-                "Voice profile update failed: %s", exc
-            )
+
+            logging.getLogger(__name__).warning("Voice profile update failed: %s", exc)
 
     def _build_label_rows(self, speakers, wav_path, auto_matches=None):
         """Build the per-speaker label rows in the GTK label dialog.
@@ -556,7 +569,9 @@ class MeetRecorderWindow(Gtk.Window):
             if match:
                 entry.set_text(match.name)
                 pct = int(match.confidence * 100)
-                entry.set_tooltip_text(f"Auto-recognized: {match.name} ({pct}% confidence)")
+                entry.set_tooltip_text(
+                    f"Auto-recognized: {match.name} ({pct}% confidence)"
+                )
             else:
                 entry.set_placeholder_text(sp.id)
             entry.set_width_chars(14)
@@ -612,9 +627,7 @@ class MeetRecorderWindow(Gtk.Window):
                     err_text = err_text[:117] + "..."
 
                 def _show_retry(msg=err_text):
-                    self._alignment_label.set_text(
-                        f"Download failed:\n{msg}"
-                    )
+                    self._alignment_label.set_text(f"Download failed:\n{msg}")
                     self._download_btn.set_label("Retry")
                     self._set_state(_State.AWAITING_ALIGNMENT)
 
@@ -622,9 +635,7 @@ class MeetRecorderWindow(Gtk.Window):
                 self._alignment_event.wait()
 
                 # Reset button label for future prompts
-                GLib.idle_add(
-                    self._download_btn.set_label, "Download & Continue"
-                )
+                GLib.idle_add(self._download_btn.set_label, "Download & Continue")
 
                 if self._alignment_choice == "download":
                     continue  # retry the download
@@ -705,10 +716,14 @@ class MeetRecorderWindow(Gtk.Window):
         Returns (config, transcript) on success, or (None, None) on failure.
         """
         from meet.transcribe import (
-            TranscriptionConfig, transcribe as do_transcribe,
-            AlignmentModelMissing, ensure_gpu_available,
+            TranscriptionConfig,
+            transcribe as do_transcribe,
+            AlignmentModelMissing,
+            ensure_gpu_available,
             check_alignment_model_cached,
-            ALIGNMENT_MODELS, _LANG_NAMES, _MODEL_SIZES,
+            ALIGNMENT_MODELS,
+            _LANG_NAMES,
+            _MODEL_SIZES,
         )
 
         config = TranscriptionConfig(**self._transcribe_kwargs)
@@ -731,7 +746,9 @@ class MeetRecorderWindow(Gtk.Window):
         # ── Pre-flight: check alignment model cache (when language is known) ──
         preflight_lang = config.language if config.language != "auto" else None
         if preflight_lang and preflight_lang in ALIGNMENT_MODELS:
-            if not config.skip_alignment and not check_alignment_model_cached(preflight_lang):
+            if not config.skip_alignment and not check_alignment_model_cached(
+                preflight_lang
+            ):
                 lang_name = _LANG_NAMES.get(preflight_lang, preflight_lang)
                 size = _MODEL_SIZES.get(preflight_lang, "unknown size")
                 self._alignment_lang = lang_name
@@ -834,13 +851,20 @@ class MeetRecorderWindow(Gtk.Window):
                 wav_path = session_files.get("wav")
 
                 # Build channel map: speaker_id -> 'mic' | 'system'
-                from meet.audio import read_stereo_channels, compute_speaker_channel_energy
+                from meet.audio import (
+                    read_stereo_channels,
+                    compute_speaker_channel_energy,
+                )
+
                 channel_map: dict[str, str] = {}
                 if wav_path and wav_path.exists():
                     stereo = read_stereo_channels(wav_path)
                     if stereo is not None:
                         mic_ratio = compute_speaker_channel_energy(
-                            stereo.mic, stereo.system, transcript.segments, stereo.sample_rate
+                            stereo.mic,
+                            stereo.system,
+                            transcript.segments,
+                            stereo.sample_rate,
                         )
                         for spk_id, ratio in mic_ratio.items():
                             channel_map[spk_id] = "mic" if ratio > 0.5 else "system"
@@ -850,6 +874,7 @@ class MeetRecorderWindow(Gtk.Window):
                 if wav_path and wav_path.exists():
                     try:
                         from meet.voiceprint import identify_speakers
+
                         auto_matches = identify_speakers(
                             wav_path,
                             transcript.segments,
@@ -858,6 +883,7 @@ class MeetRecorderWindow(Gtk.Window):
                         )
                     except Exception as exc:
                         import logging
+
                         logging.getLogger(__name__).warning(
                             "Voice identification failed: %s", exc
                         )
@@ -883,9 +909,11 @@ class MeetRecorderWindow(Gtk.Window):
 
                 if self._label_result:
                     transcript = relabel_transcript_in_memory(
-                        transcript, self._label_result,
+                        transcript,
+                        self._label_result,
                     )
                     import json as _json
+
                     session_json = session_files.get("session")
                     if session_json and session_json.exists():
                         try:
@@ -910,7 +938,9 @@ class MeetRecorderWindow(Gtk.Window):
             GLib.idle_add(self._set_state, _State.SUMMARIZING)
 
         result = post_process(
-            transcript, output.parent, output.stem,
+            transcript,
+            output.parent,
+            output.stem,
             summarize=self._summarize,
             summary_backend=self._summary_backend,
             summary_model=self._summary_model,
@@ -922,9 +952,10 @@ class MeetRecorderWindow(Gtk.Window):
             self._last_pdf = result["pdf"]
 
     def _do_sync(self, output: Path) -> None:
-        """Check if this is a Blink meeting, prompt for confirmation, then push."""
+        """Check if this is a scheduled meeting, prompt for confirmation, then sync."""
         try:
             from meet.sync import check_sync_candidate, sync_session, is_sync_configured
+
             if not is_sync_configured():
                 return
 
@@ -934,14 +965,13 @@ class MeetRecorderWindow(Gtk.Window):
 
             # Show confirmation prompt
             from meet.sync import _date_from_session
+
             date_str = _date_from_session(output.parent)
             self._sync_event.clear()
             self._sync_confirmed = False
 
             def _show_sync_prompt(_c=candidate, _d=date_str):
-                self._sync_label.set_text(
-                    f"Push to blink-wip?\n{_c.match.name} · {_d}"
-                )
+                self._sync_label.set_text(f"Sync to repo?\n{_c.match.name} · {_d}")
                 self._set_state(_State.CONFIRMING_SYNC)
 
             GLib.idle_add(_show_sync_prompt)
@@ -961,6 +991,7 @@ class MeetRecorderWindow(Gtk.Window):
             )
         except Exception as exc:
             import logging as _logging
+
             _logging.getLogger(__name__).warning("Sync failed: %s", exc)
 
     # ── State management ────────────────────────────────────────────────
@@ -975,12 +1006,21 @@ class MeetRecorderWindow(Gtk.Window):
 
         # Remove all status classes
         sctx = self._status_label.get_style_context()
-        for cls in ("status-label", "status-recording", "status-draining",
-                     "status-transcribing", "status-summarizing",
-                     "status-preparing", "status-downloading",
-                     "status-awaiting", "status-labeling",
-                     "status-confirming", "status-syncing",
-                     "status-done", "status-error"):
+        for cls in (
+            "status-label",
+            "status-recording",
+            "status-draining",
+            "status-transcribing",
+            "status-summarizing",
+            "status-preparing",
+            "status-downloading",
+            "status-awaiting",
+            "status-labeling",
+            "status-confirming",
+            "status-syncing",
+            "status-done",
+            "status-error",
+        ):
             sctx.remove_class(cls)
 
         # Hide action buttons by default; only hide alignment prompt
@@ -1031,7 +1071,9 @@ class MeetRecorderWindow(Gtk.Window):
             ctx.add_class("disabled-btn")
             self._button.set_sensitive(False)
             lang_name = self._alignment_lang or "model"
-            self._status_label.set_text(f"Downloading alignment model for {lang_name}...")
+            self._status_label.set_text(
+                f"Downloading alignment model for {lang_name}..."
+            )
             sctx.add_class("status-downloading")
             self._progress_bar.show()
             self._progress_bar.pulse()
@@ -1076,7 +1118,7 @@ class MeetRecorderWindow(Gtk.Window):
             self._button.set_label("■ Stop")
             ctx.add_class("disabled-btn")
             self._button.set_sensitive(False)
-            self._status_label.set_text("Blink meeting detected")
+            self._status_label.set_text("Scheduled meeting detected")
             sctx.add_class("status-confirming")
             self._sync_box.show_all()
             self.set_resizable(True)
@@ -1086,7 +1128,7 @@ class MeetRecorderWindow(Gtk.Window):
             self._button.set_label("■ Stop")
             ctx.add_class("disabled-btn")
             self._button.set_sensitive(False)
-            self._status_label.set_text("Pushing to blink-wip...")
+            self._status_label.set_text("Syncing to repo...")
             sctx.add_class("status-syncing")
 
         elif state == _State.DONE:
@@ -1168,6 +1210,7 @@ class MeetRecorderWindow(Gtk.Window):
 
 # ─── Public entry point ─────────────────────────────────────────────────────
 
+
 def launch(
     *,
     output_dir: str | None = None,
@@ -1209,8 +1252,10 @@ def launch(
     }
 
     win = MeetRecorderWindow(
-        capture_kwargs, transcribe_kwargs,
-        summarize=summarize, summary_backend=summary_backend,
+        capture_kwargs,
+        transcribe_kwargs,
+        summarize=summarize,
+        summary_backend=summary_backend,
         summary_model=summary_model,
     )
     win.show_all()

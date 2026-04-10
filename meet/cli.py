@@ -1275,7 +1275,7 @@ def enroll(session_dirs, list_profiles):
 
     \b
     Examples:
-        meet enroll ~/meet-recordings/meeting-20260330-170216_BlinkMondaySync
+        meet enroll ~/meet-recordings/meeting-20260330-170216_WeeklySync
         meet enroll ~/meet-recordings/meeting-20260330-*
         meet enroll --list
     """
