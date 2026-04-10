@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.1 — 2026-04-10
+
+### Bug fixes
+
+- **CUDA NVRTC JIT fix** — replaced `_ensure_nvrtc_compat()` symlink approach
+  with `_preload_nvrtc_builtins()` using `ctypes.CDLL`. The old method created
+  a wrong-version symlink and set `LD_LIBRARY_PATH` too late (after
+  `libnvrtc.so` was already loaded). The new approach preloads the correct
+  `libnvrtc-builtins.so` into the process address space before NVRTC needs it,
+  with automatic version detection across `nvidia-cuda-nvrtc` pip packages.
+
+- **Channel-based diarization fallback** — added `_split_by_channel()` for
+  stereo recordings where pyannote detects only 0–1 speakers. This can happen
+  on short recordings or when GPU-dependent floating-point differences in
+  WeSpeaker speaker embeddings cause VBx clustering to collapse multiple
+  speakers into one. The fallback uses per-segment and per-word mic vs system
+  channel RMS energy to assign YOU/REMOTE labels, which is hardware-independent
+  and reliable when stereo channels are cleanly separated.
+
+---
+
 ## v0.3.0 — 2026-04-01
 
 ### New features
