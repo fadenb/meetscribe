@@ -179,7 +179,29 @@ Options:
 - `--min-speakers 2` / `--max-speakers 6` -- hint for number of speakers
 - `--no-diarize` -- skip speaker diarization
 - `--no-summarize` -- skip AI summary generation
-- `--summary-model <model>` -- Ollama model for summary (default: `qwen3.5:9b`)
+- `--summary-backend openrouter` -- summary backend (`ollama`, `openrouter`, `claudemax`, `openai`)
+- `--summary-model <model>` -- model for summary (default: per-backend)
+- `--skip-alignment` -- skip word-level alignment (useful if alignment model is unavailable)
+- `--mixdown mono|dual` -- stereo mixdown mode (default: `mono`). Use `dual` for
+  headphone setups where mic and system audio don't bleed into each other (see below)
+
+#### Dual-channel mode for headphone users
+
+If you use headphones, your mic captures only your voice while the system
+channel captures only the remote participants. In this setup the default mono
+mixdown creates a ~20× energy imbalance that causes WhisperX to suppress the
+quieter voice.
+
+Use `--mixdown dual` to transcribe each channel independently:
+
+```bash
+meet transcribe --mixdown dual ~/meet-recordings/meeting-20260312-140000/
+```
+
+This skips diarization entirely (channel identity = speaker identity) and
+labels segments as YOU (mic) or REMOTE (system). Default `--mixdown mono`
+behavior is unchanged -- use it when your speakers play into the room and
+both voices appear on both channels.
 
 ### Record + transcribe in one shot
 
@@ -188,7 +210,8 @@ meet run
 ```
 
 Records until Ctrl+C, then automatically transcribes, generates a summary,
-and produces a PDF. Takes all options from both `record` and `transcribe`.
+and produces a PDF. Takes all options from both `record` and `transcribe`
+(including `--mixdown dual`).
 
 ### Launch the GUI widget
 
@@ -204,8 +227,12 @@ A small always-on-top window with:
 
 When 2 or more speakers are detected, a **speaker labeling dialog** appears
 before the results are saved. Each speaker is shown with their channel and a
-sample line of text. Enter a real name or leave blank to keep the auto-assigned
+sample line of text. If voice profiles exist, confident matches are shown
+automatically. Enter a real name or leave blank to keep the auto-assigned
 label (YOU, REMOTE_1, etc.).
+
+If meeting sync is configured and the recording matches a scheduled meeting,
+a **sync confirmation prompt** appears with Push / Skip buttons.
 
 ![meetscribe GUI](screenshot.png)
 
@@ -221,9 +248,19 @@ For each speaker in the recording, `meet label`:
 3. Prompts you to enter a real name (press Enter to keep the existing label)
 4. Regenerates all outputs (`.txt`, `.srt`, `.json`, `.summary.md`, `.pdf`) with the new names
 
+With `--auto`, voice profiles are used to automatically identify known speakers.
+Confident matches are applied without prompting; only unrecognized speakers get
+the interactive prompt:
+
+```bash
+meet label --auto ~/meet-recordings/meeting-20260313-214133
+```
+
 Options:
+- `--auto` -- auto-label using voice profiles (see [Voiceprint speaker recognition](#voiceprint-speaker-recognition))
 - `--no-audio` -- skip audio playback, just show text samples
 - `--no-summary` -- use find-and-replace instead of re-running Ollama
+- `--summary-backend` / `--summary-model` -- override summary backend and model for regeneration
 
 ## Output
 
@@ -327,7 +364,8 @@ stored and matched against future recordings.
 # Build profiles from already-labeled sessions
 meet enroll ~/meet-recordings/meeting-20260330-*
 
-# Future meetings will auto-suggest speaker names in the GUI labeling dialog
+# Auto-label speakers in future meetings using voice profiles
+meet label --auto ~/meet-recordings/meeting-20260401-093000
 ```
 
 Profiles are stored in `~/.config/meet/speaker_profiles.json` and improve
@@ -349,8 +387,13 @@ meet sync ~/meet-recordings/meeting-20260331-110038_STANDUP
 meet sync --list-schedule
 ```
 
-The GUI auto-syncs after recording if a matching schedule is configured.
-Sessions that don't match the schedule are skipped unless `--force` is used.
+When the GUI detects a matching scheduled meeting, it prompts for confirmation
+before syncing. Sessions that don't match the schedule are skipped. The CLI
+uses `--force` to sync unmatched sessions.
+
+You can also configure a `team_members` list and `min_team_members` threshold
+in `sync_config.json` to require that a minimum number of recognized speakers
+are present before offering to sync.
 
 ## Multilingual support
 
