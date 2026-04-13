@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.1 — 2026-04-13
+
+### Improvements
+
+- **Speaker labeling and sync prompts no longer deferred during recording** —
+  previously, the speaker labeling dialog and sync confirmation prompt would
+  wait until the user stopped recording before appearing. They now appear
+  immediately, allowing users to label speakers from a previous meeting while
+  the next one records.
+
+---
+
 ## v0.4.0 — 2026-04-13
 
 ### New features

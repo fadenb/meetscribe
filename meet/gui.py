@@ -1090,16 +1090,6 @@ class MeetRecorderWindow(Gtk.Window):
                 self._label_channel_map = channel_map
                 self._label_audio_path = wav_path
 
-                # Wait until user is not recording before showing dialog
-                if self._state in (_State.RECORDING, _State.PAUSED, _State.DRAINING):
-                    GLib.idle_add(
-                        self._set_bg_status,
-                        f"{session_name}: waiting to label speakers...",
-                    )
-                self._wait_until_not_recording()
-                if self._destroying:
-                    return transcript
-
                 GLib.idle_add(
                     self._set_bg_status, f"{session_name}: labeling speakers..."
                 )
@@ -1176,15 +1166,6 @@ class MeetRecorderWindow(Gtk.Window):
 
             candidate = check_sync_candidate(output.parent)
             if candidate is None:
-                return
-
-            # Wait until user is not recording before showing prompt
-            if self._state in (_State.RECORDING, _State.PAUSED, _State.DRAINING):
-                GLib.idle_add(
-                    self._set_bg_status, f"{session_name}: waiting to confirm sync..."
-                )
-            self._wait_until_not_recording()
-            if self._destroying:
                 return
 
             # Show confirmation prompt
