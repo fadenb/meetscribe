@@ -171,8 +171,22 @@ def _recording_loop(session) -> None:
         raise
 
 
+def _resolve_version() -> str:
+    """Resolve the meetscribe-offline package version dynamically.
+
+    Avoids the historical bug where `version="0.4.1"` was hardcoded and
+    drifted from the real package version.
+    """
+    try:
+        from importlib.metadata import version
+        return version("meetscribe-offline")
+    except Exception:
+        from . import __version__
+        return __version__
+
+
 @click.group()
-@click.version_option(version="0.4.1")
+@click.version_option(version=_resolve_version(), prog_name="meet (meetscribe-offline)")
 def main():
     """Local meeting transcription with speaker diarization."""
     pass
