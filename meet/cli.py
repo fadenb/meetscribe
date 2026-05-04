@@ -1413,6 +1413,24 @@ def sync(session_dirs, force, meeting_type, list_schedule, init_config):
     help="Whisper model (default: large-v3-turbo)",
 )
 @click.option("--device", type=click.Choice(["cuda", "cpu"]), default="cuda")
+@click.option(
+    "--torch-device",
+    type=click.Choice(["cuda", "cpu", "mps"]),
+    default=None,
+    help="PyTorch device for alignment/diarization (default: same as --device)",
+)
+@click.option(
+    "--asr-backend",
+    type=click.Choice(["auto", "whisperx", "mlx"]),
+    default="auto",
+    help="ASR backend: auto, whisperx, or mlx (default: auto)",
+)
+@click.option(
+    "--mlx-model",
+    type=str,
+    default=None,
+    help="MLX Whisper model path/repo (default: alias mapped from --model)",
+)
 @click.option("--compute-type", type=str, default="float16")
 @click.option("--batch-size", "-b", type=int, default=16)
 @click.option("--language", "-l", type=str, default="auto")
@@ -1458,6 +1476,9 @@ def gui(
     output_dir,
     model,
     device,
+    torch_device,
+    asr_backend,
+    mlx_model,
     compute_type,
     batch_size,
     language,
@@ -1479,6 +1500,9 @@ def gui(
         output_dir=output_dir,
         model=model,
         device=device,
+        torch_device=torch_device,
+        asr_backend=asr_backend,
+        mlx_model=mlx_model,
         compute_type=compute_type,
         batch_size=batch_size,
         language=language,

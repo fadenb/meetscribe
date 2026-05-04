@@ -269,6 +269,11 @@ class MeetRecorderWindow(Gtk.Window):
         vbox.set_margin_start(20)
         vbox.set_margin_end(20)
 
+        # Advanced settings (collapsible) — keeps the widget compact by default
+        # but lets users override ASR backend, torch device, and MLX model
+        # without restarting the app.
+        self._build_advanced_settings(vbox)
+
         # Timer
         self._timer_label = Gtk.Label(label="00:00:00")
         self._timer_label.get_style_context().add_class("timer-label")
@@ -432,6 +437,85 @@ class MeetRecorderWindow(Gtk.Window):
 
         # Periodic UI update (every 500ms)
         self._poll_id = GLib.timeout_add(500, self._poll_status)
+
+    # ── Advanced settings panel ─────────────────────────────────────────
+
+    def _build_advanced_settings(self, parent_vbox: "Gtk.Box") -> None:
+        """Build a collapsible 'Advanced' panel for ASR backend / torch device /
+        MLX model.  Selections are written back into ``self._transcribe_kwargs``
+        so the next transcription picks them up."""
+        expander = Gtk.Expander(label="Advanced")
+        expander.set_expanded(False)
+
+        grid = Gtk.Grid()
+        grid.set_column_spacing(8)
+        grid.set_row_spacing(4)
+        grid.set_margin_top(4)
+        grid.set_margin_bottom(4)
+
+        # Helpers ----------------------------------------------------------
+        def _label(text: str) -> "Gtk.Label":
+            lbl = Gtk.Label(label=text)
+            lbl.set_halign(Gtk.Align.END)
+            return lbl
+
+        def _combo(values: list[str], current: str | None) -> "Gtk.ComboBoxText":
+            combo = Gtk.ComboBoxText()
+            for v in values:
+                combo.append_text(v)
+            target = current if current in values else values[0]
+            combo.set_active(values.index(target))
+            return combo
+
+        # ASR backend ------------------------------------------------------
+        backend_values = ["auto", "whisperx", "mlx"]
+        current_backend = self._transcribe_kwargs.get("asr_backend", "auto")
+        self._asr_backend_combo = _combo(backend_values, current_backend)
+        self._asr_backend_combo.connect(
+            "changed",
+            lambda c: self._transcribe_kwargs.__setitem__(
+                "asr_backend", c.get_active_text() or "auto"
+            ),
+        )
+        grid.attach(_label("ASR backend:"), 0, 0, 1, 1)
+        grid.attach(self._asr_backend_combo, 1, 0, 1, 1)
+
+        # Torch device -----------------------------------------------------
+        # Use a sentinel "auto" entry that maps back to None so the dataclass
+        # platform-detects on Apple Silicon (issue #8 behavior).
+        torch_values = ["auto", "cuda", "cpu", "mps"]
+        current_td = self._transcribe_kwargs.get("torch_device")
+        current_td_label = current_td if current_td in torch_values else "auto"
+        self._torch_device_combo = _combo(torch_values, current_td_label)
+
+        def _on_torch_device_changed(combo):
+            txt = combo.get_active_text()
+            self._transcribe_kwargs["torch_device"] = None if txt == "auto" else txt
+
+        self._torch_device_combo.connect("changed", _on_torch_device_changed)
+        grid.attach(_label("Torch device:"), 0, 1, 1, 1)
+        grid.attach(self._torch_device_combo, 1, 1, 1, 1)
+
+        # MLX model --------------------------------------------------------
+        self._mlx_model_entry = Gtk.Entry()
+        self._mlx_model_entry.set_placeholder_text(
+            "(default: mapped from --model)"
+        )
+        existing_mlx = self._transcribe_kwargs.get("mlx_model")
+        if existing_mlx:
+            self._mlx_model_entry.set_text(existing_mlx)
+        self._mlx_model_entry.set_hexpand(True)
+
+        def _on_mlx_model_changed(entry):
+            text = entry.get_text().strip()
+            self._transcribe_kwargs["mlx_model"] = text or None
+
+        self._mlx_model_entry.connect("changed", _on_mlx_model_changed)
+        grid.attach(_label("MLX model:"), 0, 2, 1, 1)
+        grid.attach(self._mlx_model_entry, 1, 2, 1, 1)
+
+        expander.add(grid)
+        parent_vbox.pack_start(expander, False, False, 0)
 
     # ── Button handlers ─────────────────────────────────────────────────
 
@@ -1381,7 +1465,10 @@ def launch(
     *,
     output_dir: str | None = None,
     model: str = "large-v3-turbo",
-    device: str = "cuda",
+    device: str | None = None,
+    torch_device: str | None = None,
+    asr_backend: str = "auto",
+    mlx_model: str | None = None,
     compute_type: str = "float16",
     batch_size: int = 16,
     language: str = "auto",
@@ -1410,6 +1497,9 @@ def launch(
     transcribe_kwargs = {
         "model": model,
         "device": device,
+        "torch_device": torch_device,
+        "asr_backend": asr_backend,
+        "mlx_model": mlx_model,
         "compute_type": compute_type,
         "batch_size": batch_size,
         "language": language,
