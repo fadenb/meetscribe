@@ -1,0 +1,71 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ffmpeg/ffprobe are required at runtime by meet_record.audio
+      # (read_stereo_channels probes channels via ffprobe and decodes via
+      # ffmpeg).  ubuntu-latest preinstalls ffmpeg in /usr/bin since 2023+,
+      # but install it explicitly for forward compat.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # The full [dev] extra would pull in whisperx + torch (~700MB) which is
+      # overkill for the lint + focused-unit-test loop.  Install the minimal
+      # set of runtime deps the focused tests actually exercise, plus the
+      # tooling.  Issue #9 tracks expanding this if/when broader integration
+      # tests are added.
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff pytest numpy click reportlab requests
+          # meetscribe-record is required at import time (meet/languages.py
+          # re-exports from meet_record.languages).  Pull it from PyPI but
+          # skip its optional GUI/pyaudio extras.
+          python -m pip install meetscribe-record
+          python -m pip install -e . --no-deps
+
+      - name: Ruff lint (focused)
+        # Scope ruff to the files actively maintained for lint cleanliness.
+        # The full meet/ + tests/ tree has historical lint debt; expanding the
+        # scope is tracked as a follow-up to this MVP CI workflow.
+        run: |
+          ruff check \
+            meet/transcribe.py \
+            meet/cli.py \
+            tests/test_transcribe.py \
+            tests/test_utils.py
+
+      - name: Pytest (focused)
+        # The dual_mixdown dispatch test imports whisperx at runtime; deselect
+        # it under the no-whisperx CI environment.  Most other transcribe tests
+        # monkeypatch their dependencies and run without torch/whisperx.
+        # tests/test_capture.py and tests/test_label.py exercise audio/system
+        # tooling not available in plain ubuntu-latest; skip for the MVP.
+        # tests/test_cli.py is run only when present (it's added by issue #8).
+        run: |
+          pytest \
+            tests/test_transcribe.py \
+            tests/test_utils.py \
+            -v \
+            --deselect tests/test_transcribe.py::TestDualChannelDispatch::test_dual_mixdown_dispatches_to_dual_channel
+          if [ -f tests/test_cli.py ]; then
+            pytest tests/test_cli.py -v
+          fi
