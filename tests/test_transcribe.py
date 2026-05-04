@@ -329,9 +329,46 @@ class TestMlxAsrBackend:
 
         assert captured["audio"] is audio
 
-    def test_transcribe_asr_warns_when_mlx_ignores_custom_vad(
+    def test_transcribe_asr_notes_mlx_vad_inert_with_default_values(
         self, monkeypatch, caplog
     ):
+        """The MLX VAD note must fire even when the user passes the defaults,
+        since the values are still inert under MLX."""
+        # Reset the module-level once-per-process flag so the note fires.
+        monkeypatch.setattr("meet.transcribe._mlx_vad_note_logged", False)
+
+        class FakeMlxWhisper:
+            @staticmethod
+            def transcribe(audio, **kwargs):
+                return {
+                    "text": " hello",
+                    "language": "en",
+                    "segments": [
+                        {"start": 0, "end": 1.25, "text": " hello"},
+                    ],
+                }
+
+        monkeypatch.setitem(sys.modules, "mlx_whisper", FakeMlxWhisper)
+        # Construct with explicit defaults — pre-#6 behavior would NOT warn.
+        config = TranscriptionConfig(
+            asr_backend="mlx",
+            model="large-v3-turbo",
+            mlx_model="test/model",
+            vad_onset=TranscriptionConfig.vad_onset,
+            vad_offset=TranscriptionConfig.vad_offset,
+        )
+
+        with caplog.at_level(logging.INFO, logger="meet.transcribe"):
+            _transcribe_asr(np.zeros(16000, dtype=np.float32), config, "en")
+
+        assert "MLX backend ignores VAD options" in caplog.text
+
+    def test_transcribe_asr_mlx_vad_note_logged_once_per_process(
+        self, monkeypatch, caplog
+    ):
+        """Two MLX calls in the same process should produce only one VAD note."""
+        monkeypatch.setattr("meet.transcribe._mlx_vad_note_logged", False)
+
         class FakeMlxWhisper:
             @staticmethod
             def transcribe(audio, **kwargs):
@@ -348,13 +385,16 @@ class TestMlxAsrBackend:
             asr_backend="mlx",
             model="large-v3-turbo",
             mlx_model="test/model",
-            vad_onset=0.1,
         )
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO, logger="meet.transcribe"):
+            _transcribe_asr(np.zeros(16000, dtype=np.float32), config, "en")
             _transcribe_asr(np.zeros(16000, dtype=np.float32), config, "en")
 
-        assert "VAD options are ignored by the MLX ASR backend" in caplog.text
+        note_count = caplog.text.count("MLX backend ignores VAD options")
+        assert note_count == 1, (
+            f"Expected exactly one VAD-inert note, saw {note_count}"
+        )
 
 
 class TestWhisperXAsrBackend:

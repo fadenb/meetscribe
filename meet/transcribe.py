@@ -768,6 +768,9 @@ def _run_whisperx_asr(model, audio, config: TranscriptionConfig):
     return model.transcribe(audio, batch_size=config.batch_size)
 
 
+_mlx_vad_note_logged = False
+
+
 def _transcribe_asr(
     audio,
     config: TranscriptionConfig,
@@ -778,11 +781,18 @@ def _transcribe_asr(
     if config.asr_backend == "mlx":
         import mlx_whisper
 
-        if (config.vad_onset, config.vad_offset) != (
-            TranscriptionConfig.vad_onset,
-            TranscriptionConfig.vad_offset,
-        ):
-            log.warning("VAD options are ignored by the MLX ASR backend")
+        # MLX Whisper has its own internal VAD/segmentation and does not honor
+        # WhisperX-style vad_onset/vad_offset.  Emit an info-level note so the
+        # inert behavior is discoverable, regardless of whether the user passed
+        # the defaults or non-default values.  Logged once per process to avoid
+        # spamming logs on dual-channel runs.
+        global _mlx_vad_note_logged
+        if not _mlx_vad_note_logged:
+            log.info(
+                "MLX backend ignores VAD options (vad_onset/vad_offset); "
+                "MLX uses its own internal segmentation."
+            )
+            _mlx_vad_note_logged = True
 
         print(f"  Loading MLX model: {config.mlx_model}")
         decode_options = {}
