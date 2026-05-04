@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import logging
+import sys
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from unittest.mock import patch
 
-from meet.transcribe import Segment, Speaker, Transcript, TranscriptionConfig, _fmt_time, _fmt_srt_time
+from meet.transcribe import Segment, Speaker, Transcript, TranscriptionConfig
+from meet.transcribe import _transcribe_asr, _transcribe_dual_channel
 from meet.transcribe import transcribe as do_transcribe
 
 
@@ -235,9 +239,188 @@ class TestTranscriptionConfig:
         config = TranscriptionConfig(mixdown="dual")
         assert config.mixdown == "dual"
 
+    def test_torch_device_defaults_to_device(self):
+        config = TranscriptionConfig(device="cpu")
+        assert config.torch_device == "cpu"
+
+    def test_torch_device_can_split_from_asr_device(self):
+        config = TranscriptionConfig(device="cpu", torch_device="mps")
+        assert config.device == "cpu"
+        assert config.torch_device == "mps"
+
+    def test_asr_backend_auto_uses_whisperx_without_mlx(self, monkeypatch):
+        monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: True)
+        monkeypatch.setattr("meet.transcribe._mlx_available", lambda: False)
+
+        config = TranscriptionConfig(asr_backend="auto")
+
+        assert config.asr_backend == "whisperx"
+
+    def test_asr_backend_auto_uses_mlx_on_apple_silicon(self, monkeypatch):
+        monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: True)
+        monkeypatch.setattr("meet.transcribe._mlx_available", lambda: True)
+
+        config = TranscriptionConfig(asr_backend="auto", model="large-v3-turbo")
+
+        assert config.asr_backend == "mlx"
+        assert config.mlx_model == "mlx-community/whisper-large-v3-turbo"
+
+    def test_invalid_asr_backend_raises(self):
+        with pytest.raises(ValueError, match="Invalid ASR backend"):
+            TranscriptionConfig(asr_backend="bogus")
+
     def test_invalid_mixdown_raises(self):
         with pytest.raises(ValueError, match="Invalid mixdown mode"):
             TranscriptionConfig(mixdown="stereo")
+
+
+class TestMlxAsrBackend:
+    def test_transcribe_asr_normalizes_mlx_result(self, monkeypatch):
+        class FakeMlxWhisper:
+            @staticmethod
+            def transcribe(audio, **kwargs):
+                return {
+                    "text": " hello",
+                    "language": "en",
+                    "segments": [
+                        {"start": 0, "end": 1.25, "text": " hello"},
+                    ],
+                }
+
+        monkeypatch.setitem(sys.modules, "mlx_whisper", FakeMlxWhisper)
+        config = TranscriptionConfig(
+            asr_backend="mlx",
+            model="large-v3-turbo",
+            mlx_model="test/model",
+        )
+
+        result = _transcribe_asr("audio.wav", config, "en")
+
+        assert result == {
+            "segments": [{"start": 0.0, "end": 1.25, "text": " hello"}],
+            "language": "en",
+            "text": " hello",
+        }
+
+    def test_transcribe_asr_passes_mlx_array_input_through(self, monkeypatch):
+        captured = {}
+
+        class FakeMlxWhisper:
+            @staticmethod
+            def transcribe(audio, **kwargs):
+                captured["audio"] = audio
+                return {
+                    "text": " hello",
+                    "language": "en",
+                    "segments": [
+                        {"start": 0, "end": 1.25, "text": " hello"},
+                    ],
+                }
+
+        monkeypatch.setitem(sys.modules, "mlx_whisper", FakeMlxWhisper)
+        config = TranscriptionConfig(
+            asr_backend="mlx",
+            model="large-v3-turbo",
+            mlx_model="test/model",
+        )
+        audio = np.zeros(16000, dtype=np.float32)
+
+        _transcribe_asr(audio, config, "en")
+
+        assert captured["audio"] is audio
+
+    def test_transcribe_asr_warns_when_mlx_ignores_custom_vad(
+        self, monkeypatch, caplog
+    ):
+        class FakeMlxWhisper:
+            @staticmethod
+            def transcribe(audio, **kwargs):
+                return {
+                    "text": " hello",
+                    "language": "en",
+                    "segments": [
+                        {"start": 0, "end": 1.25, "text": " hello"},
+                    ],
+                }
+
+        monkeypatch.setitem(sys.modules, "mlx_whisper", FakeMlxWhisper)
+        config = TranscriptionConfig(
+            asr_backend="mlx",
+            model="large-v3-turbo",
+            mlx_model="test/model",
+            vad_onset=0.1,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            _transcribe_asr(np.zeros(16000, dtype=np.float32), config, "en")
+
+        assert "VAD options are ignored by the MLX ASR backend" in caplog.text
+
+
+class TestWhisperXAsrBackend:
+    def test_dual_channel_reuses_whisperx_model(self, monkeypatch, tmp_path):
+        mic_path = tmp_path / "mic.wav"
+        sys_path = tmp_path / "sys.wav"
+        mic_path.write_bytes(b"")
+        sys_path.write_bytes(b"")
+        model_loads = []
+        audio_loads = []
+
+        class FakeModel:
+            def __init__(self):
+                self.calls = 0
+
+            def transcribe(self, audio, batch_size):
+                self.calls += 1
+                return {
+                    "language": "en",
+                    "segments": [
+                        {
+                            "start": float(self.calls - 1),
+                            "end": float(self.calls),
+                            "text": f"channel {self.calls}",
+                        }
+                    ],
+                }
+
+        fake_model = FakeModel()
+
+        def fake_load_model(*args, **kwargs):
+            model_loads.append((args, kwargs))
+            return fake_model
+
+        def fake_load_audio(path):
+            audio_loads.append(path)
+            return np.zeros(16000, dtype=np.float32)
+
+        def fake_extract_mono(audio_file, channel):
+            return mic_path if channel == 0 else sys_path
+
+        monkeypatch.setitem(
+            sys.modules,
+            "whisperx",
+            SimpleNamespace(load_model=fake_load_model, load_audio=fake_load_audio),
+        )
+        monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
+        monkeypatch.setattr("meet.transcribe._extract_mono", fake_extract_mono)
+
+        config = TranscriptionConfig(
+            asr_backend="whisperx",
+            device="cpu",
+            compute_type="int8",
+            skip_alignment=True,
+            audio_pad_seconds=0,
+        )
+
+        transcript = _transcribe_dual_channel(tmp_path / "stereo.wav", config, 10.0)
+
+        assert len(model_loads) == 1
+        assert fake_model.calls == 2
+        assert len(audio_loads) == 2
+        assert [segment.speaker for segment in transcript.segments] == [
+            "YOU",
+            "REMOTE",
+        ]
 
 
 # ─── Dual-channel dispatch (mocked — full pipeline requires GPU) ──────────

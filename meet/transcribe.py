@@ -12,13 +12,17 @@ Pipeline:
 from __future__ import annotations
 
 import gc
+import importlib.util
 import json
+import logging
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+log = logging.getLogger(__name__)
 
 # Fix for CUDA NVRTC JIT compilation: pyannote's wespeaker embedding model
 # triggers torch.fft.rfft -> CUDA JIT -> NVRTC, which needs libnvrtc-builtins.so
@@ -36,7 +40,6 @@ def _preload_nvrtc_builtins():
     of LD_LIBRARY_PATH at process startup time.
     """
     import ctypes
-    import importlib.util
     import sys
 
     # Determine the CUDA major.minor that PyTorch / the driver expects.
@@ -110,6 +113,13 @@ _preload_nvrtc_builtins()
 # Local model aliases: map short names to local CTranslate2 model directories.
 # These are populated by offline conversion from HuggingFace models.
 _LOCAL_MODEL_ALIASES: dict[str, Path] = {}
+_MLX_MODEL_ALIASES: dict[str, str] = {
+    "base": "mlx-community/whisper-base",
+    "medium": "mlx-community/whisper-medium",
+    "large-v2": "mlx-community/whisper-large-v2",
+    "large-v3": "mlx-community/whisper-large-v3-mlx",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+}
 
 _ct2_cache = Path.home() / ".cache"
 for _candidate in [
@@ -124,6 +134,26 @@ def resolve_model(name: str) -> str:
     if name in _LOCAL_MODEL_ALIASES:
         return str(_LOCAL_MODEL_ALIASES[name])
     return name
+
+
+def resolve_mlx_model(name: str) -> str:
+    """Resolve a model alias to an MLX Whisper path or Hugging Face repo."""
+    return _MLX_MODEL_ALIASES.get(name, name)
+
+
+def _mlx_available() -> bool:
+    return importlib.util.find_spec("mlx_whisper") is not None
+
+
+def _apple_silicon() -> bool:
+    try:
+        import platform
+        return platform.system() == "Darwin" and platform.machine().lower() in {
+            "arm64",
+            "aarch64",
+        }
+    except Exception:
+        return False
 
 
 # ── Alignment model registry ───────────────────────────────────────────────
@@ -360,6 +390,9 @@ class TranscriptionConfig:
 
     model: str = "large-v3-turbo"
     device: str = "cuda"
+    torch_device: str | None = None
+    asr_backend: str = "auto"
+    mlx_model: str | None = None
     compute_type: str = "float16"
     batch_size: int = 16
     language: str = "auto"
@@ -392,8 +425,19 @@ class TranscriptionConfig:
             raise ValueError(
                 f"Invalid mixdown mode '{self.mixdown}': must be 'mono' or 'dual'"
             )
-        # Resolve model aliases (e.g. "large-v3-turbo" -> local CTranslate2 path)
-        self.model = resolve_model(self.model)
+        if self.asr_backend not in ("auto", "whisperx", "mlx"):
+            raise ValueError(
+                f"Invalid ASR backend '{self.asr_backend}': must be 'auto', 'whisperx', or 'mlx'"
+            )
+        if self.asr_backend == "auto":
+            self.asr_backend = "mlx" if _apple_silicon() and _mlx_available() else "whisperx"
+        # Resolve model aliases for the selected backend.
+        if self.asr_backend == "mlx":
+            self.mlx_model = resolve_mlx_model(self.mlx_model or self.model)
+        else:
+            self.model = resolve_model(self.model)
+        if self.torch_device is None:
+            self.torch_device = self.device
 
         if self.hf_token is None:
             self.hf_token = os.environ.get("HF_TOKEN")
@@ -548,7 +592,6 @@ def _mixdown_to_mono(audio_file: Path) -> Path:
 
     Falls back to a simple ffmpeg average if numpy is unavailable.
     """
-    import struct
     import wave
 
     try:
@@ -681,6 +724,102 @@ def get_audio_duration(audio_file: Path) -> float:
         return 0.0
 
 
+def _empty_torch_cache(torch_module, device: str | None) -> None:
+    """Best-effort cache release for torch-backed devices."""
+    try:
+        if device == "cuda":
+            torch_module.cuda.empty_cache()
+        elif device == "mps" and hasattr(torch_module, "mps"):
+            torch_module.mps.empty_cache()
+    except Exception:
+        log.debug("failed to empty torch cache for device %s", device, exc_info=True)
+
+
+def _empty_torch_caches(torch_module, config: TranscriptionConfig) -> None:
+    """Release cache once per configured torch-backed device."""
+    _empty_torch_cache(torch_module, config.device)
+    if config.torch_device != config.device:
+        _empty_torch_cache(torch_module, config.torch_device)
+
+
+def _load_whisperx_asr_model(config: TranscriptionConfig, language: str | None):
+    import whisperx
+
+    vad_options = {
+        "vad_onset": config.vad_onset,
+        "vad_offset": config.vad_offset,
+    }
+    print(
+        f"  Loading model: {config.model} ({config.compute_type}) on {config.device}"
+    )
+    return whisperx.load_model(
+        config.model,
+        config.device,
+        compute_type=config.compute_type,
+        language=language,
+        vad_options=vad_options,
+    )
+
+
+def _run_whisperx_asr(model, audio, config: TranscriptionConfig):
+    print(
+        f"  Transcribing (VAD onset={config.vad_onset}, offset={config.vad_offset})..."
+    )
+    return model.transcribe(audio, batch_size=config.batch_size)
+
+
+def _transcribe_asr(
+    audio,
+    config: TranscriptionConfig,
+    language: str | None,
+    whisperx_model=None,
+):
+    """Run the selected ASR backend and return a WhisperX-compatible result."""
+    if config.asr_backend == "mlx":
+        import mlx_whisper
+
+        if (config.vad_onset, config.vad_offset) != (
+            TranscriptionConfig.vad_onset,
+            TranscriptionConfig.vad_offset,
+        ):
+            log.warning("VAD options are ignored by the MLX ASR backend")
+
+        print(f"  Loading MLX model: {config.mlx_model}")
+        decode_options = {}
+        if language is not None:
+            decode_options["language"] = language
+        result = mlx_whisper.transcribe(
+            audio,
+            path_or_hf_repo=config.mlx_model,
+            verbose=False,
+            word_timestamps=False,
+            condition_on_previous_text=False,
+            **decode_options,
+        )
+        segments = [
+            {
+                "start": float(seg.get("start", 0.0)),
+                "end": float(seg.get("end", 0.0)),
+                "text": seg.get("text", ""),
+            }
+            for seg in result.get("segments", [])
+        ]
+        return {
+            "segments": segments,
+            "language": result.get("language") or language or "en",
+            "text": result.get("text", ""),
+        }
+
+    if whisperx_model is not None:
+        return _run_whisperx_asr(whisperx_model, audio, config)
+
+    model = _load_whisperx_asr_model(config, language)
+    try:
+        return _run_whisperx_asr(model, audio, config)
+    finally:
+        del model
+
+
 def _transcribe_dual_channel(
     audio_file: Path, config: TranscriptionConfig, duration: float
 ) -> Transcript:
@@ -698,28 +837,13 @@ def _transcribe_dual_channel(
 
     mic_path = None
     sys_path = None
+    asr_model = None
 
     try:
         mic_path = _extract_mono(audio_file, channel=0)
         sys_path = _extract_mono(audio_file, channel=1)
 
-        # ── Load model once ──
-        vad_options = {
-            "vad_onset": config.vad_onset,
-            "vad_offset": config.vad_offset,
-        }
         whisper_lang = None if config.language == "auto" else config.language
-
-        print(
-            f"  Loading model: {config.model} ({config.compute_type}) on {config.device}"
-        )
-        model = whisperx.load_model(
-            config.model,
-            config.device,
-            compute_type=config.compute_type,
-            language=whisper_lang,
-            vad_options=vad_options,
-        )
 
         # Pre-compute padding
         pad_samples = (
@@ -727,13 +851,17 @@ def _transcribe_dual_channel(
         )
 
         # ── Transcribe mic channel ──
-        print(f"  Transcribing mic channel (left)...")
+        print("  Transcribing mic channel (left)...")
         mic_audio = whisperx.load_audio(str(mic_path))
         if pad_samples > 0:
             mic_audio = np.concatenate(
                 [mic_audio, np.zeros(pad_samples, dtype=mic_audio.dtype)]
             )
-        mic_result = model.transcribe(mic_audio, batch_size=config.batch_size)
+        if config.asr_backend == "whisperx":
+            asr_model = _load_whisperx_asr_model(config, whisper_lang)
+        mic_result = _transcribe_asr(
+            mic_audio, config, whisper_lang, whisperx_model=asr_model
+        )
 
         # Resolve language from first transcription result
         detected_language = mic_result.get("language", whisper_lang or "en")
@@ -741,41 +869,46 @@ def _transcribe_dual_channel(
             print(f"  Detected language: {detected_language}")
 
         # ── Transcribe system channel ──
-        print(f"  Transcribing system channel (right)...")
+        print("  Transcribing system channel (right)...")
         sys_audio = whisperx.load_audio(str(sys_path))
         if pad_samples > 0:
             sys_audio = np.concatenate(
                 [sys_audio, np.zeros(pad_samples, dtype=sys_audio.dtype)]
             )
-        sys_result = model.transcribe(sys_audio, batch_size=config.batch_size)
+        sys_result = _transcribe_asr(
+            sys_audio, config, whisper_lang, whisperx_model=asr_model
+        )
+
+        if asr_model is not None:
+            del asr_model
+            asr_model = None
 
         # Free transcription model
-        del model
         gc.collect()
-        torch.cuda.empty_cache()
+        _empty_torch_caches(torch, config)
 
         # ── Align both channels ──
         if config.skip_alignment:
-            print(f"  Skipping alignment (--skip-alignment)")
+            print("  Skipping alignment (--skip-alignment)")
         elif detected_language in ALIGNMENT_MODELS and not check_alignment_model_cached(
             detected_language
         ):
             gc.collect()
-            torch.cuda.empty_cache()
+            _empty_torch_cache(torch, config.torch_device)
             raise AlignmentModelMissing(detected_language)
         else:
             print(f"  Aligning word timestamps ({detected_language})...")
             try:
                 model_a, metadata = whisperx.load_align_model(
                     language_code=detected_language,
-                    device=config.device,
+                    device=config.torch_device,
                 )
                 mic_result = whisperx.align(
                     mic_result["segments"],
                     model_a,
                     metadata,
                     mic_audio,
-                    config.device,
+                    config.torch_device,
                     return_char_alignments=False,
                 )
                 sys_result = whisperx.align(
@@ -783,12 +916,12 @@ def _transcribe_dual_channel(
                     model_a,
                     metadata,
                     sys_audio,
-                    config.device,
+                    config.torch_device,
                     return_char_alignments=False,
                 )
                 del model_a
                 gc.collect()
-                torch.cuda.empty_cache()
+                _empty_torch_cache(torch, config.torch_device)
             except Exception as align_exc:
                 if detected_language in ALIGNMENT_MODELS:
                     raise AlignmentModelMissing(detected_language) from align_exc
@@ -846,6 +979,8 @@ def _transcribe_dual_channel(
         )
 
     finally:
+        if asr_model is not None:
+            del asr_model
         for p in (mic_path, sys_path):
             if p is not None:
                 try:
@@ -885,44 +1020,23 @@ def transcribe(
 
     if not is_stereo and config.mixdown == "dual":
         print(
-            f"  Warning: --mixdown dual requires stereo audio, using standard mono pipeline"
+            "  Warning: --mixdown dual requires stereo audio, using standard mono pipeline"
         )
 
     if is_stereo and config.use_dual_channel and config.mixdown == "dual":
-        print(f"  Dual-channel detected: transcribing channels separately")
+        print("  Dual-channel detected: transcribing channels separately")
         return _transcribe_dual_channel(audio_path, config, duration)
 
     if is_stereo and config.use_dual_channel:
         mono_path = _mixdown_to_mono(audio_path)
-        print(f"  Dual-channel detected: mixing down to mono for transcription")
+        print("  Dual-channel detected: mixing down to mono for transcription")
     else:
         mono_path = audio_path
 
     try:
-        # ── Step 1: Transcribe with faster-whisper ──
-        print(
-            f"  Loading model: {config.model} ({config.compute_type}) on {config.device}"
-        )
-
-        vad_options = {
-            "vad_onset": config.vad_onset,
-            "vad_offset": config.vad_offset,
-        }
-
+        # ── Step 1: Transcribe with the selected ASR backend ──
         # "auto" means let WhisperX detect the language from the audio.
         whisper_lang = None if config.language == "auto" else config.language
-
-        model = whisperx.load_model(
-            config.model,
-            config.device,
-            compute_type=config.compute_type,
-            language=whisper_lang,
-            vad_options=vad_options,
-        )
-
-        print(
-            f"  Transcribing (VAD onset={config.vad_onset}, offset={config.vad_offset})..."
-        )
         audio = whisperx.load_audio(str(mono_path))
 
         # Pad audio with silence at the end so the VAD properly closes the
@@ -933,7 +1047,7 @@ def transcribe(
             pad_samples = int(config.audio_pad_seconds * 16000)
             audio = np.concatenate([audio, np.zeros(pad_samples, dtype=audio.dtype)])
 
-        result = model.transcribe(audio, batch_size=config.batch_size)
+        result = _transcribe_asr(audio, config, whisper_lang)
 
         # Resolve the actual language (important when auto-detecting).
         detected_language = result.get("language", whisper_lang or "en")
@@ -941,13 +1055,12 @@ def transcribe(
             print(f"  Detected language: {detected_language}")
 
         # Free transcription model memory
-        del model
         gc.collect()
-        torch.cuda.empty_cache()
+        _empty_torch_caches(torch, config)
 
         # ── Step 2: Align for word-level timestamps ──
         if config.skip_alignment:
-            print(f"  Skipping alignment (--skip-alignment)")
+            print("  Skipping alignment (--skip-alignment)")
         elif detected_language in ALIGNMENT_MODELS and not check_alignment_model_cached(
             detected_language
         ):
@@ -955,27 +1068,27 @@ def transcribe(
             # the caller (CLI/GUI) can show an actionable error.
             # Free VRAM first so the error handler can download if needed.
             gc.collect()
-            torch.cuda.empty_cache()
+            _empty_torch_cache(torch, config.torch_device)
             raise AlignmentModelMissing(detected_language)
         else:
             print(f"  Aligning word timestamps ({detected_language})...")
             try:
                 model_a, metadata = whisperx.load_align_model(
                     language_code=detected_language,
-                    device=config.device,
+                    device=config.torch_device,
                 )
                 result = whisperx.align(
                     result["segments"],
                     model_a,
                     metadata,
                     audio,
-                    config.device,
+                    config.torch_device,
                     return_char_alignments=False,
                 )
 
                 del model_a
                 gc.collect()
-                torch.cuda.empty_cache()
+                _empty_torch_cache(torch, config.torch_device)
             except Exception as align_exc:
                 # For languages NOT in our registry (WhisperX supports ~39),
                 # we can't pre-check the cache.  If the download fails at
@@ -991,10 +1104,10 @@ def transcribe(
 
         # ── Step 3: Speaker diarization ──
         if config.hf_token:
-            print(f"  Running speaker diarization...")
+            print("  Running speaker diarization...")
             diarize_model = DiarizationPipeline(
                 token=config.hf_token,
-                device=config.device,
+                device=config.torch_device,
             )
 
             diarize_kwargs: dict[str, Any] = {}
@@ -1008,9 +1121,9 @@ def transcribe(
 
             del diarize_model
             gc.collect()
-            torch.cuda.empty_cache()
+            _empty_torch_cache(torch, config.torch_device)
         else:
-            print(f"  Skipping diarization (no HF_TOKEN provided)")
+            print("  Skipping diarization (no HF_TOKEN provided)")
 
         # ── Step 4: Build Transcript object ──
         # Clamp segment timestamps to actual audio duration (we may have
@@ -1044,7 +1157,7 @@ def transcribe(
             if len(speakers) >= 2:
                 # Pyannote found multiple speakers — map them to YOU/REMOTE
                 # using channel energy ratios.
-                print(f"  Labeling speakers from dual-channel audio...")
+                print("  Labeling speakers from dual-channel audio...")
                 segments, speakers = _label_speakers_from_channels(
                     audio_path,
                     segments,
@@ -1105,7 +1218,7 @@ def _label_speakers_from_channels(
 
     stereo = read_stereo_channels(stereo_file)
     if stereo is None:
-        print(f"  Channel labeling: skipping, not stereo or unreadable")
+        print("  Channel labeling: skipping, not stereo or unreadable")
         return segments, speakers
 
     speaker_mic_ratio = compute_speaker_channel_energy(
@@ -1116,7 +1229,7 @@ def _label_speakers_from_channels(
         return segments, speakers
 
     # Log the ratios for debugging
-    print(f"  Channel analysis:")
+    print("  Channel analysis:")
     for spk, ratio in sorted(speaker_mic_ratio.items()):
         label = "mic-dominant" if ratio > 0.5 else "system-dominant"
         print(f"    {spk}: mic_ratio={ratio:.3f} ({label})")
