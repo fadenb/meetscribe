@@ -280,6 +280,48 @@ class TestTranscriptionConfig:
         assert config.device == "cuda"
         assert config.torch_device == "cuda"
 
+    def test_device_defaults_to_cuda_on_linux(self, monkeypatch):
+        monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: False)
+        # Stub validation (#7) so 'cuda' passes regardless of host GPU.
+        monkeypatch.setattr(
+            "meet.transcribe._torch_device_available", lambda d: True
+        )
+        config = TranscriptionConfig()
+        assert config.device == "cuda"
+        assert config.torch_device == "cuda"
+
+    def test_device_defaults_to_cpu_with_mps_on_apple_silicon(self, monkeypatch):
+        monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: True)
+        monkeypatch.setattr("meet.transcribe._mps_available", lambda: True)
+        # Disable MLX auto-selection to keep this test focused on device defaults.
+        monkeypatch.setattr("meet.transcribe._mlx_available", lambda: False)
+        # _mps_available is the platform-default helper; the device-validation
+        # helper (_torch_device_available) is independent.  Stub both so the
+        # config picks 'mps' as the default AND passes validation under #7.
+        monkeypatch.setattr(
+            "meet.transcribe._torch_device_available", lambda d: True
+        )
+        config = TranscriptionConfig()
+        assert config.device == "cpu"
+        assert config.torch_device == "mps"
+
+    def test_apple_silicon_without_mps_falls_back_to_cpu_torch(self, monkeypatch):
+        monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: True)
+        monkeypatch.setattr("meet.transcribe._mps_available", lambda: False)
+        monkeypatch.setattr("meet.transcribe._mlx_available", lambda: False)
+        config = TranscriptionConfig()
+        assert config.device == "cpu"
+        assert config.torch_device == "cpu"
+
+    def test_explicit_device_overrides_apple_silicon_default(self, monkeypatch):
+        monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: True)
+        monkeypatch.setattr("meet.transcribe._mps_available", lambda: True)
+        monkeypatch.setattr("meet.transcribe._mlx_available", lambda: False)
+        config = TranscriptionConfig(device="cpu", torch_device="cpu")
+        assert config.device == "cpu"
+        assert config.torch_device == "cpu"
+
+
     def test_asr_backend_auto_uses_whisperx_without_mlx(self, monkeypatch):
         monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: True)
         monkeypatch.setattr("meet.transcribe._mlx_available", lambda: False)

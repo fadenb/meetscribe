@@ -187,6 +187,17 @@ def _torch_device_available(device: str) -> bool | None:
     return None
 
 
+def _mps_available() -> bool:
+    """Return True if PyTorch MPS backend is available at runtime.
+
+    Returns False both when torch isn't installed and when MPS isn't built
+    into the installed torch wheel.  Thin convenience wrapper over
+    ``_torch_device_available('mps')`` that maps the None-when-torch-missing
+    case to False (since callers picking platform defaults want a boolean).
+    """
+    return bool(_torch_device_available("mps"))
+
+
 # ── Alignment model registry ───────────────────────────────────────────────
 # Maps language codes to (model_name, model_type) where model_type is
 # "torchaudio" or "huggingface".  Only languages we actively support are
@@ -420,7 +431,9 @@ class TranscriptionConfig:
     """Configuration for the transcription pipeline."""
 
     model: str = "large-v3-turbo"
-    device: str = "cuda"
+    # device defaults to None so __post_init__ can platform-detect:
+    # cpu on Apple Silicon (CUDA unavailable on macOS), cuda elsewhere.
+    device: str | None = None
     torch_device: str | None = None
     asr_backend: str = "auto"
     mlx_model: str | None = None
@@ -467,8 +480,16 @@ class TranscriptionConfig:
             self.mlx_model = resolve_mlx_model(self.mlx_model or self.model)
         else:
             self.model = resolve_model(self.model)
+        # Resolve device defaults.  CUDA is unavailable on macOS, so on Apple
+        # Silicon we fall back to cpu for the ASR/whisperx device and prefer
+        # mps for the torch device (alignment + diarization).
+        if self.device is None:
+            self.device = "cpu" if _apple_silicon() else "cuda"
         if self.torch_device is None:
-            self.torch_device = self.device
+            if _apple_silicon():
+                self.torch_device = "mps" if _mps_available() else "cpu"
+            else:
+                self.torch_device = self.device
 
         # Validate device availability when torch is installed.  We deliberately
         # skip validation when torch can't be imported so that

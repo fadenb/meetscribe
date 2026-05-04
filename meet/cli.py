@@ -205,14 +205,20 @@ def main():
 @click.option(
     "--device",
     type=click.Choice(["cuda", "cpu"]),
-    default="cuda",
-    help="Device to run on (default: cuda)",
+    default=None,
+    help=(
+        "Device to run on (default: cpu on Apple Silicon, cuda elsewhere). "
+        "Use --torch-device to set the PyTorch device separately."
+    ),
 )
 @click.option(
     "--torch-device",
     type=click.Choice(["cuda", "cpu", "mps"]),
     default=None,
-    help="PyTorch device for alignment/diarization (default: same as --device)",
+    help=(
+        "PyTorch device for alignment/diarization "
+        "(default: mps on Apple Silicon, otherwise same as --device)"
+    ),
 )
 @click.option(
     "--asr-backend",
@@ -468,7 +474,12 @@ def transcribe(
     default="large-v3-turbo",
     help="Whisper model (default: large-v3-turbo)",
 )
-@click.option("--device", type=click.Choice(["cuda", "cpu"]), default="cuda")
+@click.option(
+    "--device",
+    type=click.Choice(["cuda", "cpu"]),
+    default=None,
+    help="Device to run on (default: cpu on Apple Silicon, cuda elsewhere)",
+)
 @click.option(
     "--torch-device",
     type=click.Choice(["cuda", "cpu", "mps"]),
@@ -1412,7 +1423,12 @@ def sync(session_dirs, force, meeting_type, list_schedule, init_config):
     default="large-v3-turbo",
     help="Whisper model (default: large-v3-turbo)",
 )
-@click.option("--device", type=click.Choice(["cuda", "cpu"]), default="cuda")
+@click.option(
+    "--device",
+    type=click.Choice(["cuda", "cpu"]),
+    default=None,
+    help="Device to run on (default: cpu on Apple Silicon, cuda elsewhere)",
+)
 @click.option(
     "--torch-device",
     type=click.Choice(["cuda", "cpu", "mps"]),
