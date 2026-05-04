@@ -156,6 +156,37 @@ def _apple_silicon() -> bool:
         return False
 
 
+def _torch_device_available(device: str) -> bool | None:
+    """Return whether the given torch device is available at runtime.
+
+    Returns:
+        True/False if torch can be imported and the answer is known.
+        None if torch is not installed (caller should skip validation).
+    """
+    if device == "cpu":
+        return True
+    try:
+        import torch  # noqa: PLC0415  - lazy by design
+    except ImportError:
+        return None
+    if device == "cuda":
+        try:
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+    if device == "mps":
+        backends = getattr(torch, "backends", None)
+        mps = getattr(backends, "mps", None) if backends is not None else None
+        if mps is None:
+            return False
+        try:
+            return bool(mps.is_available())
+        except Exception:
+            return False
+    # Unknown device string — defer to caller's existing validation.
+    return None
+
+
 # ── Alignment model registry ───────────────────────────────────────────────
 # Maps language codes to (model_name, model_type) where model_type is
 # "torchaudio" or "huggingface".  Only languages we actively support are
@@ -438,6 +469,27 @@ class TranscriptionConfig:
             self.model = resolve_model(self.model)
         if self.torch_device is None:
             self.torch_device = self.device
+
+        # Validate device availability when torch is installed.  We deliberately
+        # skip validation when torch can't be imported so that
+        # `TranscriptionConfig` remains constructible in torch-less test
+        # environments and lightweight CLI helpers (e.g. `meet check`).
+        for field_name, value in (
+            ("device", self.device),
+            ("torch_device", self.torch_device),
+        ):
+            available = _torch_device_available(value)
+            if available is None:
+                # torch is not installed (or device string is unknown to our
+                # helper) — skip.
+                continue
+            if not available:
+                raise ValueError(
+                    f"{field_name}='{value}' but {value.upper()} is not "
+                    f"available on this system. "
+                    "Try --device cpu (and --torch-device cpu/mps) or install "
+                    "the appropriate torch build."
+                )
 
         if self.hf_token is None:
             self.hf_token = os.environ.get("HF_TOKEN")

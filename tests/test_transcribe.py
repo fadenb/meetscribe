@@ -243,10 +243,42 @@ class TestTranscriptionConfig:
         config = TranscriptionConfig(device="cpu")
         assert config.torch_device == "cpu"
 
-    def test_torch_device_can_split_from_asr_device(self):
+    def test_torch_device_can_split_from_asr_device(self, monkeypatch):
+        # Pretend MPS is available (otherwise validation rejects mps on
+        # non-Mac CI).
+        monkeypatch.setattr(
+            "meet.transcribe._torch_device_available",
+            lambda d: True,
+        )
         config = TranscriptionConfig(device="cpu", torch_device="mps")
         assert config.device == "cpu"
         assert config.torch_device == "mps"
+
+    def test_invalid_torch_device_cuda_raises(self, monkeypatch):
+        # Force the helper to report cuda unavailable.
+        def fake_avail(d):
+            return False if d == "cuda" else True
+        monkeypatch.setattr("meet.transcribe._torch_device_available", fake_avail)
+        with pytest.raises(ValueError, match="CUDA is not available"):
+            TranscriptionConfig(device="cuda", torch_device="cuda")
+
+    def test_invalid_torch_device_mps_raises(self, monkeypatch):
+        def fake_avail(d):
+            return False if d == "mps" else True
+        monkeypatch.setattr("meet.transcribe._torch_device_available", fake_avail)
+        with pytest.raises(ValueError, match="MPS is not available"):
+            TranscriptionConfig(device="cpu", torch_device="mps")
+
+    def test_validation_skipped_when_torch_missing(self, monkeypatch):
+        # When torch is not installed, the helper returns None; validation
+        # must not raise.  This preserves the invariant that the package is
+        # importable / configurable without torch.
+        monkeypatch.setattr("meet.transcribe._torch_device_available", lambda d: None)
+        # cuda would normally fail validation — but with torch missing, this
+        # should construct silently.
+        config = TranscriptionConfig(device="cuda", torch_device="cuda")
+        assert config.device == "cuda"
+        assert config.torch_device == "cuda"
 
     def test_asr_backend_auto_uses_whisperx_without_mlx(self, monkeypatch):
         monkeypatch.setattr("meet.transcribe._apple_silicon", lambda: True)
