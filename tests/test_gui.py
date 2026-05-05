@@ -98,3 +98,37 @@ def test_launch_defaults_pass_none_through(monkeypatch):
     assert tk["device"] is None
     assert tk["torch_device"] is None
     assert tk["mlx_model"] is None
+    # Language defaults to "auto" so Whisper auto-detects.  Users can override
+    # via --language on the CLI or the GUI Advanced panel dropdown.
+    assert tk["language"] == "auto"
+
+
+def test_launch_passes_explicit_language(monkeypatch):
+    """``launch(language='en')`` must thread into transcribe_kwargs so the
+    GUI Advanced panel dropdown can override Whisper's auto-detect."""
+    import meet.gui as gui_mod
+
+    captured: dict = {}
+
+    class _StubWindow:
+        _rec_btn_box = type("_X", (), {"hide": lambda self: None})()
+        _alignment_box = type("_X", (), {"hide": lambda self: None})()
+        _label_box = type("_X", (), {"hide": lambda self: None})()
+        _sync_box = type("_X", (), {"hide": lambda self: None})()
+        _progress_bar = type("_X", (), {"hide": lambda self: None})()
+        _open_transcript_btn = type("_X", (), {"hide": lambda self: None})()
+        _open_folder_btn = type("_X", (), {"hide": lambda self: None})()
+        _bg_label = type("_X", (), {"hide": lambda self: None})()
+
+        def __init__(self, capture_kwargs, transcribe_kwargs, **kwargs):
+            captured["transcribe_kwargs"] = transcribe_kwargs
+
+        def show_all(self):
+            pass
+
+    monkeypatch.setattr(gui_mod, "MeetRecorderWindow", _StubWindow)
+    monkeypatch.setattr(gui_mod.Gtk, "main", lambda: None)
+
+    gui_mod.launch(language="en")
+
+    assert captured["transcribe_kwargs"]["language"] == "en"

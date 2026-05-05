@@ -514,6 +514,41 @@ class MeetRecorderWindow(Gtk.Window):
         grid.attach(_label("MLX model:"), 0, 2, 1, 1)
         grid.attach(self._mlx_model_entry, 1, 2, 1, 1)
 
+        # Language ---------------------------------------------------------
+        # Whisper auto-detect on sparse / quiet audio (long silences, short
+        # opening utterances) is unreliable and can mis-classify English as
+        # ja/zh, producing pages of CJK hallucinations.  Letting the user
+        # set the meeting language up-front avoids that failure mode.
+        # The list mirrors the alignment-models registry plus a few common
+        # Whisper-supported languages.
+        language_values = [
+            "auto",
+            "en",
+            "de",
+            "fr",
+            "es",
+            "tr",
+            "fa",
+            "it",
+            "pt",
+            "nl",
+            "ja",
+            "zh",
+            "ko",
+            "ar",
+            "ru",
+        ]
+        current_language = self._transcribe_kwargs.get("language", "auto")
+        self._language_combo = _combo(language_values, current_language)
+        self._language_combo.connect(
+            "changed",
+            lambda c: self._transcribe_kwargs.__setitem__(
+                "language", c.get_active_text() or "auto"
+            ),
+        )
+        grid.attach(_label("Language:"), 0, 3, 1, 1)
+        grid.attach(self._language_combo, 1, 3, 1, 1)
+
         expander.add(grid)
         parent_vbox.pack_start(expander, False, False, 0)
 
