@@ -227,6 +227,69 @@ class TestLabelSpeakersFromChannels:
         # All should be REMOTE variants
         assert all("REMOTE" in label for label in labels)
 
+    def test_sensitive_condenser_mic_assigns_you_via_margin(self, tmp_path):
+        """Sensitive condenser mics (e.g. RODE NT-USB) pick up enough room
+        audio that the local speaker's mic_ratio sits below 0.5, even though
+        they are clearly the most mic-dominant.  The margin check (top
+        candidate >0.1 above the average of others, with absolute >0.15)
+        should still assign YOU in this case."""
+        import numpy as np
+        import wave as wave_mod
+        from meet.transcribe import _label_speakers_from_channels
+
+        sr = 16000
+        # 9s of audio = three 3s segments back-to-back.
+        n_frames_each = int(3.0 * sr)
+        t_each = np.linspace(0, 3.0, n_frames_each, dtype=np.float32)
+
+        # Speaker 0 (the local user, talks 0-3s).  The mic pickup is only
+        # somewhat louder than the system channel because the condenser mic
+        # picks up the speakers' own bleed.  ratio ~0.4.
+        mic_seg0 = (8000 * np.sin(2 * np.pi * 440 * t_each)).astype(np.int16)
+        sys_seg0 = (5500 * np.sin(2 * np.pi * 880 * t_each)).astype(np.int16)
+
+        # Speaker 1 (remote, talks 3-6s).  System channel dominant.
+        mic_seg1 = (500 * np.sin(2 * np.pi * 220 * t_each)).astype(np.int16)
+        sys_seg1 = (20000 * np.sin(2 * np.pi * 1100 * t_each)).astype(np.int16)
+
+        # Speaker 2 (remote, talks 6-9s).  System channel dominant.
+        mic_seg2 = (500 * np.sin(2 * np.pi * 330 * t_each)).astype(np.int16)
+        sys_seg2 = (20000 * np.sin(2 * np.pi * 1320 * t_each)).astype(np.int16)
+
+        mic = np.concatenate([mic_seg0, mic_seg1, mic_seg2])
+        system = np.concatenate([sys_seg0, sys_seg1, sys_seg2])
+        stereo = np.column_stack((mic, system)).flatten()
+
+        wav_path = tmp_path / "condenser.wav"
+        with wave_mod.open(str(wav_path), "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(stereo.tobytes())
+
+        segments = [
+            Segment(start=0.0, end=3.0, text="local user", speaker="SPEAKER_00"),
+            Segment(start=3.0, end=6.0, text="remote a",   speaker="SPEAKER_01"),
+            Segment(start=6.0, end=9.0, text="remote b",   speaker="SPEAKER_02"),
+        ]
+        speakers = [
+            Speaker(id="SPEAKER_00"),
+            Speaker(id="SPEAKER_01"),
+            Speaker(id="SPEAKER_02"),
+        ]
+
+        new_segs, _ = _label_speakers_from_channels(
+            wav_path, segments, speakers,
+        )
+
+        labels = {s.speaker for s in new_segs}
+        # SPEAKER_00 should be labeled YOU even though its absolute ratio
+        # is below 0.5 — the margin over the average of the other two
+        # speakers' ratios is large enough.
+        assert "YOU" in labels, (
+            f"expected YOU label via margin check, got labels={labels}"
+        )
+
 
 # ─── TranscriptionConfig validation ──────────────────────────────────────
 

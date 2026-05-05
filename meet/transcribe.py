@@ -1320,10 +1320,28 @@ def _label_speakers_from_channels(
     # The speaker with the highest mic ratio is YOU — but only if they
     # are actually mic-dominant.  When no speaker exceeds the threshold
     # (e.g. only system audio was captured), label everyone as REMOTE.
+    #
+    # We use both an absolute check (ratio > 0.5) and a relative margin
+    # check.  Sensitive condenser mics (e.g. RODE NT-USB) pick up room
+    # audio on the mic channel, which can push the local speaker's ratio
+    # below 0.5 even though they are clearly the most mic-dominant.  The
+    # margin check catches this case: if the top speaker's ratio is well
+    # above the average of all other speakers, they are almost certainly
+    # the local mic user.
     you_speaker = max(speaker_mic_ratio, key=lambda s: speaker_mic_ratio[s])
+    you_ratio = speaker_mic_ratio[you_speaker]
+
+    other_ratios = [r for s, r in speaker_mic_ratio.items() if s != you_speaker]
+    avg_other = sum(other_ratios) / len(other_ratios) if other_ratios else 0.0
+    margin = you_ratio - avg_other
+
+    print(
+        f"    Best candidate: {you_speaker} "
+        f"(ratio={you_ratio:.3f}, margin={margin:.3f} over avg={avg_other:.3f})"
+    )
 
     label_map: dict[str, str] = {}
-    if speaker_mic_ratio[you_speaker] > 0.5:
+    if you_ratio > 0.5 or (margin > 0.1 and you_ratio > 0.15):
         # At least one speaker is mic-dominant
         label_map[you_speaker] = "YOU"
         remote_speakers = [s for s in sorted(speaker_mic_ratio) if s != you_speaker]
