@@ -238,6 +238,21 @@ def _run(
     return result
 
 
+def _current_branch_ahead_count(repo: Path) -> int:
+    """Return how many local commits the current branch is ahead of upstream."""
+    result = _run(
+        ["git", "rev-list", "--count", "@{upstream}..HEAD"],
+        cwd=repo,
+        check=False,
+    )
+    if result.returncode != 0:
+        return 0
+    try:
+        return int(result.stdout.strip() or "0")
+    except ValueError:
+        return 0
+
+
 def _get_clone_dir() -> Path:
     """Return the local clone directory for the configured repo."""
     config = load_sync_config()
@@ -277,8 +292,15 @@ def ensure_repo_cloned(progress_callback=None) -> Path:
         _run(["git", "clone", repo_url, str(clone_dir)])
         _log("Clone complete.")
     else:
-        # Pull latest
-        _run(["git", "pull", "--ff-only"], cwd=clone_dir, check=False)
+        status = _run(["git", "status", "--porcelain"], cwd=clone_dir)
+        if status.stdout.strip():
+            raise RuntimeError(
+                f"Sync repo has uncommitted changes at {clone_dir}. "
+                "Commit, stash, or clean them before syncing."
+            )
+
+        # Pull latest, rebasing any previously-created local meeting commits.
+        _run(["git", "pull", "--rebase"], cwd=clone_dir)
 
     return clone_dir
 
@@ -441,6 +463,14 @@ def sync_session(
     # Check if there's anything to commit
     status = _run(["git", "status", "--porcelain"], cwd=repo)
     if not status.stdout.strip():
+        ahead_count = _current_branch_ahead_count(repo)
+        if ahead_count:
+            _log(f"  No new file changes, but {ahead_count} local commit(s) need pushing.")
+            _log("  Pushing...")
+            _run(["git", "push"], cwd=repo)
+            _log(f"  Pushed {ahead_count} existing commit(s).")
+            return copied
+
         _log("  Nothing to commit — already up to date.")
         return copied
 
