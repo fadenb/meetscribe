@@ -17,10 +17,16 @@ CPU-only mode works (`--device cpu`) but is significantly slower.
 
 ## Operating System
 
-- **Linux** with PulseAudio or PipeWire (PulseAudio compat layer)
-- Tested on Pop!_OS 22.04 (GNOME, X11) with PipeWire 1.0.3
-- Should work on Ubuntu 22.04+, Fedora 38+, Arch, etc.
-- macOS and Windows are **not supported** (PulseAudio dependency)
+- **Linux** with PulseAudio or PipeWire (PulseAudio compat layer) for
+  recording (`meet record`, `meet run`). Tested on Pop!_OS 22.04 (GNOME, X11)
+  with PipeWire 1.0.3. Should work on Ubuntu 22.04+, Fedora 38+, Arch, etc.
+- **macOS Apple Silicon** is supported for the post-capture pipeline
+  (transcription, labeling, summarization, sync) as of v0.6.0. Install with
+  `pip install 'meetscribe-offline[mlx]'`. Audio capture on macOS is not
+  supported by `meet record`; feed audio in via `meet transcribe <file>`,
+  or use [vezir](https://github.com/pretyflaco/vezir) to run a Mac as a
+  transcription server with Linux/Android clients.
+- **Windows is not supported.**
 
 ## Software Dependencies
 

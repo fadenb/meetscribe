@@ -1,5 +1,8 @@
 # meetscribe
 
+[![CI](https://github.com/pretyflaco/meetscribe/actions/workflows/ci.yml/badge.svg)](https://github.com/pretyflaco/meetscribe/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/meetscribe-offline.svg)](https://pypi.org/project/meetscribe-offline/)
+
 Fully local meeting transcription with speaker diarization, AI-generated
 summaries, and professional PDF output.
 
@@ -77,12 +80,26 @@ meet run
 
 ## Requirements
 
-- **Linux** with PipeWire or PulseAudio
-- **NVIDIA GPU** with CUDA (8GB+ VRAM recommended; CPU mode available but slower)
-- **Python 3.10+**
-- **ffmpeg**
-- **HuggingFace token** (free) for the diarization model
-- **Ollama** (optional) for AI meeting summaries
+meetscribe runs in two configurations:
+
+**Linux desktop** (full pipeline: record + transcribe + label + sync)
+
+- Linux with PipeWire or PulseAudio (for system-audio capture)
+- NVIDIA GPU with CUDA (8 GB+ VRAM recommended; CPU mode available but slower)
+- Python 3.10+, ffmpeg
+- HuggingFace token (free) for the diarization model
+- Ollama (optional) for local AI summaries
+
+**macOS Apple Silicon** (post-capture pipeline: transcribe + label + sync)
+
+- M1 / M2 / M3 Mac running macOS
+- Python 3.10+, ffmpeg
+- `pip install 'meetscribe-offline[mlx]'` to auto-select MLX Whisper for ASR
+- HuggingFace token, Ollama as above
+- Note: `meet record` / `meet run` (audio capture) require Linux. On a Mac,
+  feed in audio captured elsewhere via `meet transcribe <file.wav>`, or use
+  [vezir](https://github.com/pretyflaco/vezir) to run a Mac as a server with
+  Linux/Android thin clients providing the recordings.
 
 See [REQUIREMENTS.md](REQUIREMENTS.md) for full hardware/software details.
 
@@ -179,7 +196,8 @@ Options:
   WhisperX for audio loading, alignment, and diarization.
 - `--mlx-model <repo-or-path>` -- MLX Whisper model path/repo (default: maps
   `large-v3-turbo` to `mlx-community/whisper-large-v3-turbo`)
-- `--device cuda` -- `cuda` or `cpu` (default: `cuda`)
+- `--device cuda` -- `cuda` or `cpu`. Default: auto-detected — `cpu` on
+  Apple Silicon (since macOS has no CUDA), `cuda` elsewhere.
 - `--torch-device mps` -- optional PyTorch device for alignment/diarization;
   useful with MLX ASR or CPU ASR on Apple Silicon.
 - `--compute-type float16` -- `float16` or `int8` for lower VRAM (default: `float16`)
@@ -567,7 +585,10 @@ export LD_LIBRARY_PATH=$HOME/.local/lib/cuda:$LD_LIBRARY_PATH
 - Overlapping speech is not handled well (Whisper limitation)
 - Speaker labels default to role-based (YOU, REMOTE_1, REMOTE_2) — use `meet label` or the GUI dialog to assign real names
 - Diarization accuracy varies with audio quality and number of speakers
-- Linux only (PulseAudio/PipeWire dependency)
+- Audio capture (`meet record`, `meet run`) requires Linux with PulseAudio
+  or PipeWire. Transcription, labeling, summarization, and sync work on both
+  Linux (CUDA) and macOS Apple Silicon (MLX Whisper + MPS) as of v0.6.0.
+- Windows is not supported.
 - Local 20B-class summary models (e.g. `gpt-oss:20b`) can hallucinate on
   transcripts dominated by very short low-information utterances ("yes",
   "okay") and may exceed the default 600s timeout on very large
@@ -582,9 +603,17 @@ widget with Record/Stop, live timer, status indicator, and one-click
 access to the resulting PDF and session folder. See
 [Launch the GUI widget](#launch-the-gui-widget) for details.
 
-**Does it work on Windows / macOS?** No. meetscribe currently requires
-Linux with PipeWire or PulseAudio for system-audio capture. See
-[Limitations](#limitations).
+**Does it work on Windows / macOS?** System-audio recording requires Linux
+(PulseAudio / PipeWire). The post-capture pipeline (`meet transcribe`,
+`meet label`, `meet sync`, etc.) works on macOS Apple Silicon as of v0.6.0
+— install with `pip install 'meetscribe-offline[mlx]'`. Windows is not
+supported.
+
+**Can I run a Mac as a transcription server?** Yes — see
+[vezir](https://github.com/pretyflaco/vezir), the team-scale wrapper around
+meetscribe. A Mac can act as the GPU server with Linux laptops or the
+[Android client](https://github.com/pretyflaco/vezir-android) providing
+the audio.
 
 **Can I use it without a GPU?** Yes, with `--device cpu`, but
 transcription will be 5–20× slower depending on the Whisper model.
